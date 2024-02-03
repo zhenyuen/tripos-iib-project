@@ -79,18 +79,24 @@ class AlphaStableDriver(NonGaussianDriver):
         ft_func = model.ft_func(dt=dt)
         ft = ft_func(jtimes=jtimes)
         # print(jsizes.shape)
-        # print(ft.shape)
-        m = (dt ** (1.0 / self.alpha)) * np.sum(jsizes[:, np.newaxis, :] * ft, axis=0)
+       
+        m = (dt ** (1.0 / self.alpha)) * np.sum(jsizes.reshape(-1, 1, 1) * ft, axis=0)
+
         return self.mu_W * m
 
     def _covar(
         self, model: ExtendedModel, dt: np.double, jsizes2: np.ndarray, jtimes: np.ndarray
     ) -> np.ndarray:
+        
         ft2_func = model.ft2_func(dt=dt)
         ft2 = ft2_func(jtimes=jtimes)
-        s = (dt ** (2.0 / self.alpha)) * np.sum(jsizes2[:, np.newaxis, np.newaxis, :] * ft2, axis=0)
+        # print(ft2.shape)
+        # print(jsizes2)
+        s = (dt ** (2.0 / self.alpha)) * np.sum(jsizes2.reshape(-1, 1, 1) * ft2, axis=0)
         omega_func = model.omega_func(dt=dt)
         omega = omega_func()
+        
+        # raise Excepti on
         return omega + (self.sigma_W**2) * s
 
     def _residual_constant(self) -> np.double:
@@ -119,11 +125,9 @@ class AlphaStableDriver(NonGaussianDriver):
     def noise(self, num_samples: int, model: ExtendedModel, time_interval: timedelta) -> np.ndarray:
         dt = time_interval.total_seconds()
         epochs, jtimes = self.latents(model=model, dt=dt, num_samples=num_samples)
-        
-
+    
         noise_mean = self.mean(model=model, time_interval=time_interval, epochs=epochs, jtimes=jtimes)  
         noise_covar = self.covar(model=model, time_interval=time_interval, epochs=epochs, jtimes=jtimes) 
-
         R = (
             np.linalg.cholesky(noise_covar)
             if np.all(np.linalg.eigvals(noise_covar) > 0)

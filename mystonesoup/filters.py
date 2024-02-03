@@ -1,10 +1,14 @@
 from stonesoup.predictor.particle import ParticlePredictor
 from stonesoup.updater.particle import ParticleUpdater
 from stonesoup.predictor.kalman import KalmanPredictor
-from stonesoup.types.state import ParticleState, GaussianState, StateVector, StateVectors
-from stonesoup.types.prediction import Prediction
+from stonesoup.types.state import ParticleState, CovarianceMatrix, GaussianState, StateVector, StateVectors
+from stonesoup.types.prediction import Prediction, MeasurementPrediction, GaussianMeasurementPrediction
 from stonesoup.types.update import Update
 from stonesoup.base import Base, Property, clearable_cached_property
+from scipy.stats import multivariate_normal
+from scipy.special import logsumexp
+from functools import lru_cache
+
 import numpy as np
 
 
@@ -40,17 +44,255 @@ class RBParticleStateUpdate(Update, RBParticleState):
 
     This is a simple RBParticle state update object.
     """
+    """Particle Filter update step
 
+        Parameters
+        ----------
+        hypothesis : :class:`~.Hypothesis`
+            Hypothesis with predicted state and associated detection used for
+            updating.
+
+        Returns
+        -------
+        : :class:`~.ParticleState`
+            The state posterior
+        """
+    pass
+
+
+class RBParticleMeasurementPrediction(MeasurementPrediction, RBParticleState):
+    cross_covar: CovarianceMatrix = Property(
+    default=None, doc="The state-measurement cross covariance matrix")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.cross_covar is not None \
+                and self.cross_covar.shape[1] != self.state_vector.shape[0]:
+            raise ValueError("cross_covar should have the same number of "
+                             "columns as the number of rows in state_vector")
 
 class RBParticleStatePrediction(Prediction, RBParticleState):
     """RBStateUpdate type
 
     This is a simple RBParticle state update object.
     """
+    pass
 
 
 class RBParticleUpdater(ParticleUpdater):
-    pass
+    def _measurement_matrix(self, predicted_state=None, measurement_model=None,
+                            **kwargs):
+        r"""This is straightforward Kalman so just get the Matrix from the
+        measurement model.
+
+        Parameters
+        ----------
+        predicted_state : :class:`~.GaussianState`
+            The predicted state :math:`\mathbf{x}_{k|k-1}`, :math:`P_{k|k-1}`
+        measurement_model : :class:`~.MeasurementModel`
+            The measurement model. If omitted, the model in the updater object
+            is used
+        **kwargs : various
+            Passed to :meth:`~.MeasurementModel.matrix`
+
+        Returns
+        -------
+        : :class:`numpy.ndarray`
+            The measurement matrix, :math:`H_k`
+
+        """
+        return self._check_measurement_model(
+            measurement_model).matrix(**kwargs)
+
+    def _measurement_cross_covariance(self, predicted_state, measurement_matrix):
+        """
+        Return the measurement cross covariance matrix, :math:`P_{k~k-1} H_k^T`
+
+        Parameters
+        ----------
+        predicted_state : :class:`GaussianState`
+            The predicted state which contains the covariance matrix :math:`P` as :attr:`.covar`
+            attribute
+        measurement_matrix : numpy.array
+            The measurement matrix, :math:`H`
+
+        Returns
+        -------
+        :  numpy.ndarray
+            The measurement cross-covariance matrix
+
+        """
+        num_samples = predicted_state.covariance.shape[-1]
+        return np.einsum('ijk,jm->imk', predicted_state.covariance, measurement_matrix.T)
+
+    def _innovation_covariance(self, m_cross_cov, meas_mat, meas_mod):
+        """Compute the innovation covariance
+
+        Parameters
+        ----------
+        m_cross_cov : numpy.ndarray
+            The measurement cross covariance matrix
+        meas_mat : numpy.ndarray
+            Measurement matrix
+        meas_mod : :class:~.MeasurementModel`
+            Measurement model
+
+        Returns
+        -------
+        : numpy.ndarray
+            The innovation covariance
+
+        """
+        meas_covar = meas_mod.covar()        
+        return np.einsum('ij,jkl->ikl', meas_mat, m_cross_cov) + meas_covar[..., np.newaxis]
+
+    def _posterior_mean(self, predicted_state, kalman_gain, measurement, measurement_prediction):
+        r"""Compute the posterior mean, :math:`\mathbf{x}_{k|k} = \mathbf{x}_{k|k-1} + K_k
+        \mathbf{y}_k`, where the innovation :math:`\mathbf{y}_k = \mathbf{z}_k -
+        h(\mathbf{x}_{k|k-1}).
+
+        Parameters
+        ----------
+        predicted_state : :class:`State`, :class:`Prediction`
+            The predicted state
+        kalman_gain : numpy.ndarray
+            Kalman gain
+        measurement : :class:`Detection`
+            The measurement
+        measurement_prediction : :class:`MeasurementPrediction`
+            Predicted measurement
+
+        Returns
+        -------
+        : :class:`StateVector`
+            The posterior mean estimate
+        """
+        post_mean = predicted_state.state_vector + \
+            kalman_gain @ (measurement.state_vector - measurement_prediction.state_vector)
+        return post_mean.view(StateVector)
+                 
+    def _posterior_covariance(self, hypothesis):
+        """
+        Return the posterior covariance for a given hypothesis
+
+        Parameters
+        ----------
+        hypothesis: :class:`~.Hypothesis`
+            A hypothesised association between state prediction and measurement. It returns the
+            measurement prediction which in turn contains the measurement cross covariance,
+            :math:`P_{k|k-1} H_k^T and the innovation covariance,
+            :math:`S = H_k P_{k|k-1} H_k^T + R`
+
+        Returns
+        -------
+        : :class:`~.CovarianceMatrix`
+            The posterior covariance matrix rendered via the Kalman update process.
+        : numpy.ndarray
+            The Kalman gain, :math:`K = P_{k|k-1} H_k^T S^{-1}`
+
+        """
+        predicted_covar = hypothesis.prediction.covariance
+        post_cov = np.zeros_like(predicted_covar)
+        num_samples = post_cov.shape[-1]
+
+        for p in range(num_samples):
+            mp_covar = hypothesis.measurement_prediction.covariance[..., p]
+            mp_cross_covar =  hypothesis.measurement_prediction.cross_covar[..., p]
+            
+            kalman_gain = mp_cross_covar @ np.linalg.inv(mp_covar)
+            post_cov[..., p] = predicted_covar[..., p] - kalman_gain @ mp_covar @ kalman_gain.T
+            
+        return post_cov.view(CovarianceMatrix), kalman_gain
+
+    def update(self, hypothesis, **kwargs):
+        predicted_state = hypothesis.prediction
+
+        if hypothesis.measurement.measurement_model is None:
+            measurement_model = self.measurement_model
+        else:
+            measurement_model = hypothesis.measurement.measurement_model
+
+
+        if hypothesis.measurement_prediction is None:
+            # Attach the measurement prediction to the hypothesis
+            hypothesis.measurement_prediction = self.predict_measurement(
+                predicted_state, measurement_model=measurement_model, **kwargs)
+
+
+        posterior_covariance, kalman_gain = self._posterior_covariance(hypothesis)
+
+        # Posterior mean
+        posterior_mean = self._posterior_mean(predicted_state, kalman_gain,
+                                              hypothesis.measurement,
+                                              hypothesis.measurement_prediction)
+
+        new_weight = predicted_state.log_weight + measurement_model.logpdf(
+            hypothesis.measurement, predicted_state, **kwargs)
+
+
+        # Normalise the weights
+        new_weight -= logsumexp(new_weight)
+
+        predicted_state.log_weight = new_weight
+
+        # Resample
+        resample_flag = True
+        if self.resampler is not None:
+            resampled_state = self.resampler.resample(predicted_state)
+            if resampled_state == predicted_state:
+                resample_flag = False
+            predicted_state = resampled_state
+
+        if self.regulariser is not None and resample_flag:
+            prior = hypothesis.prediction.parent
+            predicted_state = self.regulariser.regularise(prior,
+                                                          predicted_state)
+        return  Update.from_state(
+            state_vector=posterior_mean,
+            covariance=posterior_covariance,
+            state=hypothesis.prediction,
+            hypothesis=hypothesis,
+            timestamp=hypothesis.prediction.timestamp
+        )
+
+
+    @lru_cache()
+    def predict_measurement(self, predicted_state, measurement_model=None,
+                            **kwargs):
+        r"""Predict the measurement implied by the predicted state mean
+
+        Parameters
+        ----------
+        predicted_state : :class:`~.GaussianState`
+            The predicted state :math:`\mathbf{x}_{k|k-1}`, :math:`P_{k|k-1}`
+        measurement_model : :class:`~.MeasurementModel`
+            The measurement model. If omitted, the model in the updater object
+            is used
+        **kwargs : various
+            These are passed to :meth:`~.MeasurementModel.function` and
+            :meth:`~.MeasurementModel.matrix`
+
+        Returns
+        -------
+        : :class:`GaussianMeasurementPrediction`
+            The measurement prediction, :math:`\mathbf{z}_{k|k-1}`
+
+        """
+        # If a measurement model is not specified then use the one that's
+        # native to the updater
+        measurement_model = self._check_measurement_model(measurement_model)
+
+        pred_meas = measurement_model.function(predicted_state, **kwargs)        
+        hh = self._measurement_matrix(predicted_state=predicted_state,
+                                      measurement_model=measurement_model,
+                                      **kwargs)
+
+        # The measurement cross covariance and innovation covariance
+        meas_cross_cov = self._measurement_cross_covariance(predicted_state, hh)
+        innov_cov = self._innovation_covariance(meas_cross_cov, hh, measurement_model)
+
+        return MeasurementPrediction.from_state(
+            predicted_state, pred_meas, innov_cov, cross_covar=meas_cross_cov)
 
 
 class RBParticlePredictor(ParticlePredictor):
@@ -75,16 +317,24 @@ class RBParticlePredictor(ParticlePredictor):
         num_samples = len(prior.weight)
         model = self.transition_model
         epochs_l, jtimes_l = model.latents(num_samples=num_samples, time_interval=time_interval)
-        process_mean = model.mean(time_interval=time_interval, epochs_l=epochs_l, jtimes_l=jtimes_l)
-        process_covar = model.covar(time_interval=time_interval, epochs_l=epochs_l, jtimes_l=jtimes_l)
-        print(process_covar.shape)
-        print(process_mean.shape)
-        F = model.matrix(time_interval=time_interval, **kwargs)
-        new_state_vector = F @ prior.state_vector + process_mean + model.ext_input(**kwargs)
-        # new_covariance = F @ prior.covariance @ F.T + process_covar
         
-        new_covariance = np.einsum('ij,jkl->ikl', F, np.einsum('ijl,jk->ikl', prior.covariance, F.T)) + process_covar
-        
+        new_state_vector = np.zeros_like(prior.state_vector)
+        new_covariance = np.zeros_like(prior.covariance)
+        for p in range(num_samples):
+            epochs = epochs_l[..., p]
+            jtimes = jtimes_l[..., p]
+
+            process_mean = model.mean(time_interval=time_interval, epochs_l=epochs, jtimes_l=jtimes)
+            process_covar = model.covar(time_interval=time_interval, epochs_l=epochs, jtimes_l=jtimes)
+            F = model.matrix(time_interval=time_interval, **kwargs)
+            # print(prior.covariance[..., p].shape)
+            mean = F @ prior.state_vector[..., p:p+1] + process_mean + model.ext_input(**kwargs)
+            covar = F @ prior.covariance[..., p] @ F.T + process_covar
+
+            new_covariance[..., p] = covar
+            new_state_vector[..., p] = multivariate_normal.rvs(mean.flatten(), covar)
+
+
         return Prediction.from_state(prior,
                                      parent=prior,
                                      state_vector=new_state_vector,

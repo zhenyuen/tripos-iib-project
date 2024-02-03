@@ -107,7 +107,7 @@ class NonGaussianDriver(Driver):
         if self._model_is_master(model):
             # cutoff = self.c * dt
             # init = self._rng.exponential(
-            #     scale=1.0, size=max(int(np.ceil(1.1 * cutoff)), num_samples)
+            #     scale=rate, size=max(int(np.ceil(1.1 * cutoff)), num_samples)
             # ).cumsum()
             # epochs = [init]
             # last_epoch = init[-1]
@@ -121,8 +121,8 @@ class NonGaussianDriver(Driver):
 
             # epochs = np.concatenate(epochs)
             # epochs = epochs[epochs < cutoff]
+            
             epochs = self._rng.exponential(scale=rate, size=(self.c, num_samples))
-            # cumulative sum each column
             epochs = epochs.cumsum(axis=0)
             # Generate jump times
             jtimes = self._rng.uniform(low=0.0, high=dt, size=epochs.shape)
