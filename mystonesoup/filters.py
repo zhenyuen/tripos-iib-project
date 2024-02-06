@@ -226,34 +226,35 @@ class RBParticleUpdater(ParticleUpdater):
                                               hypothesis.measurement,
                                               hypothesis.measurement_prediction)
 
-        new_weight = predicted_state.log_weight + measurement_model.logpdf(
-            hypothesis.measurement, predicted_state, **kwargs)
-
-
-        # Normalise the weights
-        new_weight -= logsumexp(new_weight)
-
-        predicted_state.log_weight = new_weight
-
-        # Resample
-        resample_flag = True
-        if self.resampler is not None:
-            resampled_state = self.resampler.resample(predicted_state)
-            if resampled_state == predicted_state:
-                resample_flag = False
-            predicted_state = resampled_state
-
-        if self.regulariser is not None and resample_flag:
-            prior = hypothesis.prediction.parent
-            predicted_state = self.regulariser.regularise(prior,
-                                                          predicted_state)
-        return  Update.from_state(
+        posterior = Update.from_state(
             state_vector=posterior_mean,
             covariance=posterior_covariance,
             state=hypothesis.prediction,
             hypothesis=hypothesis,
             timestamp=hypothesis.prediction.timestamp
         )
+
+        new_weight = posterior.log_weight + measurement_model.logpdf(
+            hypothesis.measurement, posterior, **kwargs)
+
+
+        # Normalise the weights
+        new_weight -= logsumexp(new_weight) 
+
+        posterior.log_weight = new_weight
+
+        # Resample
+        resample_flag = True
+        if self.resampler is not None:
+            resampled_state = self.resampler.resample(posterior)
+            if resampled_state == posterior:
+                resample_flag = False
+            posterior = resampled_state
+
+        if self.regulariser is not None and resample_flag:
+            prior = hypothesis.prediction.parent
+            posterior = self.regulariser.regularise(prior, posterior)
+        return  posterior
 
 
     @lru_cache()
