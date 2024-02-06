@@ -84,7 +84,7 @@ def get_covar(state):
     covariance = state.covariance
     mu = state.state_vector
     weighted_covar = np.sum(state.weight[np.newaxis, np.newaxis, :] * covariance, axis=len(covariance.shape)-1)
-    mu_bar = np.mean(mu, axis=1)
+    mu_bar = np.sum(state.weight[np.newaxis, :] * mu, axis=1)
     tmp = mu - mu_bar[:, np.newaxis]
     weighted_mean = np.sum(state.weight[np.newaxis, np.newaxis, :] * (np.einsum("ik,kj->ijk", tmp, tmp.T)), axis=len(covariance.shape)-1)
     return weighted_mean + weighted_covar
