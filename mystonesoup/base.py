@@ -27,7 +27,7 @@ class ExtendedModel(Model):
     # Not sure about naming the matrices/vectors below or if they should be explicit properties.
     A: Optional[np.ndarray] = Property(default=None, doc="Transition matrix A.")
     b: Optional[np.ndarray] = Property(default=None, doc="Input transform vector b.")
-    h: Optional[np.ndarray] = Property(default=None, doc="Non-Gaussian noise transform vector, h")
+    h: Optional[np.ndarray] = Property9(default=None, doc="Non-Gaussian noise transform vector, h")
     g: Optional[np.ndarray] = Property(default=None, doc="Gaussian noise transform vector, g")
 
     @abstractmethod
