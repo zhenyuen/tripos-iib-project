@@ -24,19 +24,32 @@ class RBParticleState(ParticleState):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.fixed_covar is not None:
+            raise AttributeError("Fixed covariance should be none")
 
-    # if state_vector or covariance modified, it will clear the cache
-    @clearable_cached_property("state_vector", "covariance")
-    def gaussian_states(self, *args, **kwargs):
-        gaussian_states = [
-            GaussianState(
-                state_vector=self.state_vector[:, n],
-                covar=self.covariance[:, :, n],
-                timestamp=self.timestamp,
-            )
-            for n in range(self.state_vector.shape[1])
-        ]
-        return gaussian_states
+    # # if state_vector or covariance modified, it will clear the cache
+    # @clearable_cached_property("state_vector", "covariance")
+    # def gaussian_states(self, *args, **kwargs):
+    #     gaussian_states = [
+    #         GaussianState(
+    #             state_vector=self.state_vector[:, n],
+    #             covar=self.covariance[:, :, n],
+    #             timestamp=self.timestamp,
+    #         )
+    #         for n in range(self.state_vector.shape[1])
+    #     ]
+    #     return gaussian_states
+    
+    @clearable_cached_property('state_vector', 'weight', 'covariance')
+    def covar(self):
+        """Sample covariance matrix for particles"""
+        covariance = self.covariance
+        mu = self.state_vector
+        weighted_covar = np.sum(self.weight[np.newaxis, np.newaxis, :] * covariance, axis=len(covariance.shape)-1)
+        mu_bar = np.sum(self.weight[np.newaxis, :] * mu, axis=1)
+        tmp = mu - mu_bar[:, np.newaxis]
+        weighted_mean = np.sum(self.weight[np.newaxis, np.newaxis, :] * (np.einsum("ik,kj->ijk", tmp, tmp.T)), axis=len(covariance.shape)-1)
+        return weighted_mean + weighted_covar
 
 
 class RBParticleStateUpdate(Update, RBParticleState):
