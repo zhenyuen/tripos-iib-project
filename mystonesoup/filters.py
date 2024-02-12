@@ -74,7 +74,7 @@ class RBParticleStateUpdate(Update, RBParticleState):
 
 
 class RBParticleMeasurementPrediction(MeasurementPrediction, RBParticleState):
-    cross_covar: CovarianceMatrix = Property(
+    cross_covar: np.ndarray = Property(
     default=None, doc="The state-measurement cross covariance matrix")
 
     def __init__(self, *args, **kwargs):
