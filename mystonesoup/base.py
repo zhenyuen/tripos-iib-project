@@ -182,6 +182,13 @@ class NonGaussianExtModel(ExtendedModel):
     g_driver: Optional[Driver] = Property(default=None, doc="Gaussian driver.")
     ng_driver: Optional[Driver] = Property(default=None, doc="Non-Gaussian driver.")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.g_driver:
+            self.g_driver.register_model(self)
+        if self.ng_driver:
+            self.ng_driver.register_model(self)
+
     def latents(self, num_samples: int, time_interval: timedelta, *args, **kwargs):
         if self.ng_driver is None:
             return np.zeros((1, num_samples)), np.zeros((1, num_samples))
