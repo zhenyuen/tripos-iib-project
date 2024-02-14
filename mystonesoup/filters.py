@@ -50,8 +50,7 @@ class RBParticleState(ParticleState):
         tmp = mu - mu_bar[:, np.newaxis]
         weighted_mean = np.sum(self.weight[np.newaxis, np.newaxis, :] * (np.einsum("ik,kj->ijk", tmp, tmp.T)), axis=len(covariance.shape)-1)
         return weighted_mean + weighted_covar
-
-
+    
 class RBParticleStateUpdate(Update, RBParticleState):
     """RBStateUpdate type
 
@@ -328,7 +327,8 @@ class RBParticlePredictor(ParticlePredictor):
         except TypeError:
             # TypeError: (timestamp or prior.timestamp) is None
             time_interval = None
-        num_samples = len(prior.weight)
+        # print(vars(prior))
+        num_samples = prior.state_vector.shape[-1]
         model = self.transition_model
         epochs_l, jtimes_l = model.latents(num_samples=num_samples, time_interval=time_interval)
         
